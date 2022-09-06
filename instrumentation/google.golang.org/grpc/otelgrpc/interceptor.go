@@ -18,8 +18,10 @@ package otelgrpc // import "go.opentelemetry.io/contrib/instrumentation/google.g
 // https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/semantic_conventions/rpc.md
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net"
+	"strings"
 
 	"github.com/golang/protobuf/proto" // nolint:staticcheck
 
@@ -113,6 +115,7 @@ func UnaryClientInterceptor(opts ...Option) grpc.UnaryClientInterceptor {
 			s, _ := status.FromError(err)
 			span.SetStatus(codes.Error, s.Message())
 			span.SetAttributes(statusCodeAttr(s.Code()))
+			parseError(s.Message(), span)
 		} else {
 			span.SetAttributes(statusCodeAttr(grpc_codes.OK))
 		}
@@ -355,6 +358,7 @@ func UnaryServerInterceptor(opts ...Option) grpc.UnaryServerInterceptor {
 			span.SetStatus(codes.Error, s.Message())
 			span.SetAttributes(statusCodeAttr(s.Code()))
 			messageSent.Event(ctx, 1, s.Proto())
+			parseError(s.Message(), span)
 		} else {
 			span.SetAttributes(statusCodeAttr(grpc_codes.OK))
 			messageSent.Event(ctx, 1, resp)
@@ -497,4 +501,19 @@ func peerFromCtx(ctx context.Context) string {
 // statusCodeAttr returns status code attribute based on given gRPC code.
 func statusCodeAttr(c grpc_codes.Code) attribute.KeyValue {
 	return GRPCStatusCodeKey.Int64(int64(c))
+}
+
+func parseError(msg string, span trace.Span) {
+	comp := strings.Split(msg, "|")
+	decoded := msg
+	codeTxt := ""
+	if len(comp) >= 2 {
+		codeTxt = comp[0]
+		buf, err := base64.StdEncoding.DecodeString(comp[1])
+		if err == nil {
+			decoded = string(buf)
+		}
+	}
+	span.SetAttributes(semconv.ExceptionTypeKey.String(codeTxt))
+	span.SetAttributes(semconv.ExceptionMessageKey.String(decoded))
 }
